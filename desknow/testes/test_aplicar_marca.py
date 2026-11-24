@@ -25,7 +25,7 @@ PASTAS = ["flutter/lib", "flutter/assets", "flutter/windows/runner", "flutter/ma
           "flutter/android/app/src/main", "res"]
 ARQUIVOS = ["libs/hbb_common/src/config.rs", "src/auth_2fa.rs", "Cargo.toml",
             "libs/portable/Cargo.toml", "flutter/pubspec.yaml", "flutter/android/app/build.gradle",
-            "build.py", "src/tray.rs"]
+            "build.py", "src/tray.rs", "flutter/macos/Runner.xcodeproj/project.pbxproj"]
 CONFIG = "libs/hbb_common/src/config.rs"
 
 
@@ -100,6 +100,9 @@ class AplicarMarca(unittest.TestCase):
         self.assertIn(f"PRODUCT_NAME = {MARCA['nome']}", xc)
         self.assertIn("PRODUCT_MODULE_NAME = RustDesk", xc)
         self.assertIn(f"PRODUCT_BUNDLE_IDENTIFIER = {MARCA['mac_id']}", xc)
+        pbx = ler(self.raiz, "flutter/macos/Runner.xcodeproj/project.pbxproj")
+        self.assertEqual(pbx.count(f"PRODUCT_BUNDLE_IDENTIFIER = {MARCA['mac_id']};"), 3)
+        self.assertNotIn("com.carriez.rustdesk;", pbx)
         self.assertIn(f"<string>{MARCA['nome'].lower()}</string>", ler(self.raiz, "flutter/macos/Runner/Info.plist"))
         self.assertIn(f"Release/{MARCA['nome']}.app/Contents/MacOS/", ler(self.raiz, "build.py"))
         self.assertIn("assets/icone-bandeja-mac.png", ler(self.raiz, "src/tray.rs"))

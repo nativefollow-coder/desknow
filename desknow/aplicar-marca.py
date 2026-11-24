@@ -175,6 +175,11 @@ def aplicar(raiz: Path, marca: dict, gravar: bool = True) -> tuple[list[str], li
     # o MainMenu.xib procura AppDelegate e MainFlutterWindow no módulo Swift "RustDesk":
     # o app muda de nome, o módulo não
     xc.inserir_depois(f"PRODUCT_NAME = {nome}", f"{xc.nl}PRODUCT_MODULE_NAME = RustDesk")
+    # o projeto do Xcode fixa o identificador nas configurações do alvo (Debug, Release e Profile),
+    # o que passa por cima do AppInfo.xcconfig
+    arq("flutter/macos/Runner.xcodeproj/project.pbxproj").trocar(
+        "PRODUCT_BUNDLE_IDENTIFIER = com.carriez.rustdesk;",
+        f"PRODUCT_BUNDLE_IDENTIFIER = {marca['mac_id']};")
     plist = arq("flutter/macos/Runner/Info.plist")
     plist.trocar("<string>com.carriez.rustdesk</string>", f"<string>{marca['mac_id']}</string>")
     plist.trocar("<string>rustdesk</string>", f"<string>{nome.lower()}</string>")  # esquema desknow://

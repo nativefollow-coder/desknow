@@ -714,7 +714,13 @@ jobs:
             exit 1
           fi
           echo "Versão do app: ${reported_version}"
-          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "${APP}/Contents/Info.plist"
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "${APP}/Contents/Info.plist")
+          ESPERADO=$(python3 -c "import json; print(json.load(open('desknow/marca.json', encoding='utf-8'))['mac_id'])")
+          echo "CFBundleIdentifier: ${BUNDLE_ID} (esperado ${ESPERADO})"
+          if [ "$BUNDLE_ID" != "$ESPERADO" ]; then
+            echo "::error::O app saiu com o identificador ${BUNDLE_ID}, esperado ${ESPERADO}"
+            exit 1
+          fi
 
       - name: Gerar o DMG sem assinatura
         shell: bash
