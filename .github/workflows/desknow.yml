@@ -272,9 +272,13 @@ jobs:
         shell: bash
         run: |
           sed -i '/dpiAware/d' res/manifest.xml
+          # O executável leva o nome do app: assim o portátil extrai em %LOCALAPPDATA%\<nome>,
+          # separado do RustDesk, e o instalador já o reconhece pelo nome (rename_exe_cmd).
+          NOME_APP=$(python3 -c "import json; print(json.load(open('desknow/marca.json', encoding='utf-8'))['nome'])")
+          mv ./rustdesk/rustdesk.exe "./rustdesk/${NOME_APP}.exe"
           pushd ./libs/portable
           pip3 install -r requirements.txt
-          python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/rustdesk.exe
+          python3 ./generate.py -f ../../rustdesk/ -o . -e "../../rustdesk/${NOME_APP}.exe"
           popd
           mkdir -p ./SaidaWindows
           mv ./target/release/rustdesk-portable-packer.exe "./SaidaWindows/DeskNow-${VERSION}-${{ matrix.job.arch }}.exe"

@@ -130,13 +130,20 @@ def aplicar(raiz: Path, marca: dict, gravar: bool = True) -> tuple[list[str], li
     cfg.trocar('pub static ref BUILTIN_SETTINGS: RwLock<HashMap<String, String>> = Default::default();',
                'pub static ref BUILTIN_SETTINGS: RwLock<HashMap<String, String>> = '
                'RwLock::new(HashMap::from([("hide-powered-by-me".to_owned(), "Y".to_owned())]));')
+    # o servidor aberto do DeskNow não tem contas nem agenda de endereços; sem isto, o botão
+    # de login mandaria e-mail e senha para o servidor de contas do RustDesk (admin.rustdesk.com)
+    cfg.trocar('pub static ref HARD_SETTINGS: RwLock<HashMap<String, String>> = Default::default();',
+               'pub static ref HARD_SETTINGS: RwLock<HashMap<String, String>> = '
+               'RwLock::new(HashMap::from([("disable-account".to_owned(), "Y".to_owned()), '
+               '("disable-ab".to_owned(), "Y".to_owned())]));')
     arq("src/auth_2fa.rs").trocar('const ISSUER: &str = "RustDesk";', f'const ISSUER: &str = "{nome}";')
 
-    # 2. Dados do programa no Windows (propriedades do .exe)
-    cargo = arq("Cargo.toml")
-    cargo.trocar_re(r'(?m)^LegalCopyright = "[^"]*"', f'LegalCopyright = "{copyright_}"')
-    cargo.trocar_re(r'(?m)^ProductName = "[^"]*"', f'ProductName = "{nome}"')
-    cargo.trocar_re(r'(?m)^FileDescription = "[^"]*"', f'FileDescription = "{nome}"')
+    # 2. Dados do programa no Windows (propriedades do .exe do app e do instalador portátil)
+    for toml in ("Cargo.toml", "libs/portable/Cargo.toml"):
+        cargo = arq(toml)
+        cargo.trocar_re(r'(?m)^LegalCopyright = "[^"]*"', f'LegalCopyright = "{copyright_}"')
+        cargo.trocar_re(r'(?m)^ProductName = "[^"]*"', f'ProductName = "{nome}"')
+        cargo.trocar_re(r'(?m)^FileDescription = "[^"]*"', f'FileDescription = "{nome}"')
     rc = arq("flutter/windows/runner/Runner.rc")
     for campo, valor in (("CompanyName", empresa), ("FileDescription", nome),
                          ("LegalCopyright", copyright_), ("ProductName", nome)):

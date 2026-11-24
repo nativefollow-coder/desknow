@@ -24,7 +24,7 @@ MARCA = json.loads((REPO / "desknow" / "marca.json").read_text(encoding="utf-8")
 PASTAS = ["flutter/lib", "flutter/assets", "flutter/windows/runner",
           "flutter/android/app/src/main", "res"]
 ARQUIVOS = ["libs/hbb_common/src/config.rs", "src/auth_2fa.rs", "Cargo.toml",
-            "flutter/pubspec.yaml", "flutter/android/app/build.gradle"]
+            "libs/portable/Cargo.toml", "flutter/pubspec.yaml", "flutter/android/app/build.gradle"]
 CONFIG = "libs/hbb_common/src/config.rs"
 
 
@@ -67,6 +67,13 @@ class AplicarMarca(unittest.TestCase):
         self.assertIn(f'RENDEZVOUS_SERVERS: &[&str] = &["{MARCA["servidor"]}"]', cfg)
         self.assertIn(f'RS_PUB_KEY: &str = "{MARCA["chave_publica"]}"', cfg)
         self.assertIn('("hide-powered-by-me".to_owned(), "Y".to_owned())', cfg)
+        # sem contas: o login não pode mandar credenciais para o servidor de contas do RustDesk
+        self.assertIn('("disable-account".to_owned(), "Y".to_owned())', cfg)
+        self.assertIn('("disable-ab".to_owned(), "Y".to_owned())', cfg)
+        for toml in ("Cargo.toml", "libs/portable/Cargo.toml"):
+            texto = ler(self.raiz, toml)
+            self.assertIn(f'ProductName = "{MARCA["nome"]}"', texto, toml)
+            self.assertNotIn("RustDesk Remote Desktop", texto, toml)
         self.assertIn(f'applicationId "{MARCA["android_id"]}"',
                       ler(self.raiz, "flutter/android/app/build.gradle"))
         self.assertNotIn("RustDesk", ler(self.raiz, "flutter/android/app/src/main/res/values/strings.xml"))
