@@ -7,6 +7,9 @@ services:
   hbbs:
     image: rustdesk/rustdesk-server:1.1.16
     command: hbbs -k _ -r desknow.analistagomes.com:21117
+    environment:
+      # Sempre pelo relay: a conexão direta (hole punching) abre mas trava entre certas redes (24/11).
+      - ALWAYS_USE_RELAY=Y
     volumes:
       - ./data:/root
     network_mode: host
