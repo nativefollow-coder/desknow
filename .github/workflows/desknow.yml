@@ -700,6 +700,22 @@ jobs:
           fi
           ./build.py --flutter --hwcodec --unix-file-copy-paste ${{ matrix.job.extra-build-args }}
 
+      - name: Assinar o app com assinatura local (sem certificado)
+        # O build.py copia o executável "service" para dentro do app depois que o Xcode
+        # assinou o pacote. Isso quebra o selo da assinatura, e o macOS chama o app baixado
+        # de "danificado", sem a opção "Abrir Mesmo Assim". Sem certificado da Apple, o app
+        # é assinado de novo com assinatura local (ad-hoc), mantendo os direitos
+        # (entitlements) e o runtime que o Xcode aplicou.
+        shell: bash
+        run: |
+          APP="./flutter/build/macos/Build/Products/Release/${NOME_APP}.app"
+          codesign --force --sign - --options runtime "${APP}/Contents/MacOS/service"
+          codesign --force --sign - --preserve-metadata=entitlements,flags,runtime "${APP}"
+          codesign --verify --deep --strict --verbose=2 "${APP}"
+          codesign --display --verbose=2 "${APP}" 2>&1 | grep -E "^(Identifier|Format|CodeDirectory|Signature)" || true
+          echo "Direitos do app:"
+          codesign --display --entitlements - "${APP}" 2>/dev/null | grep -oE "com\.apple\.security\.[a-z.-]+" || true
+
       - name: Conferir o app compilado
         # Confere se o app tem o executável principal e o serviço, se o binário roda e
         # reporta a versão do Cargo.toml, e mostra o CFBundleIdentifier.
@@ -739,6 +755,23 @@ jobs:
             "./SaidaMacOS/DeskNow-${VERSION}-${{ matrix.job.arch }}.dmg" \
             "./flutter/build/macos/Build/Products/Release/${NOME_APP}.app"
           test -f "./SaidaMacOS/DeskNow-${VERSION}-${{ matrix.job.arch }}.dmg"
+
+      - name: Conferir o app dentro do DMG
+        # Confere a assinatura do app como o usuário recebe, dentro do DMG. Depois simula o
+        # download (marca de quarentena) e mostra o que o Gatekeeper diz: sem notarização ele
+        # recusa, mas a assinatura precisa continuar válida para aparecer "Abrir Mesmo Assim".
+        shell: bash
+        run: |
+          DMG="./SaidaMacOS/DeskNow-${VERSION}-${{ matrix.job.arch }}.dmg"
+          PONTO="$(mktemp -d)"
+          COPIA="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -mountpoint "${PONTO}" "${DMG}"
+          codesign --verify --deep --strict --verbose=2 "${PONTO}/${NOME_APP}.app"
+          ditto "${PONTO}/${NOME_APP}.app" "${COPIA}/${NOME_APP}.app"
+          hdiutil detach "${PONTO}" || hdiutil detach -force "${PONTO}"
+          xattr -w com.apple.quarantine "0081;$(printf '%x' "$(date +%s)");Safari;" "${COPIA}/${NOME_APP}.app"
+          echo "Gatekeeper (informativo):"
+          spctl --assess --type execute --verbose=4 "${COPIA}/${NOME_APP}.app" 2>&1 || true
 
       - name: Enviar o DMG macOS
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
