@@ -704,17 +704,27 @@ jobs:
         # O build.py copia o executável "service" para dentro do app depois que o Xcode
         # assinou o pacote. Isso quebra o selo da assinatura, e o macOS chama o app baixado
         # de "danificado", sem a opção "Abrir Mesmo Assim". Sem certificado da Apple, o app
-        # é assinado de novo com assinatura local (ad-hoc), mantendo os direitos
-        # (entitlements) e o runtime que o Xcode aplicou.
+        # é assinado de novo com assinatura local (ad-hoc) e runtime protegido, com os direitos
+        # do Release.entitlements. Eles não incluem o get-task-allow que o Xcode injeta na
+        # assinatura local e que deixaria um depurador se conectar ao app.
         shell: bash
         run: |
           APP="./flutter/build/macos/Build/Products/Release/${NOME_APP}.app"
           codesign --force --sign - --options runtime "${APP}/Contents/MacOS/service"
-          codesign --force --sign - --preserve-metadata=entitlements,flags,runtime "${APP}"
+          codesign --force --sign - --options runtime --entitlements flutter/macos/Runner/Release.entitlements "${APP}"
           codesign --verify --deep --strict --verbose=2 "${APP}"
           codesign --display --verbose=2 "${APP}" 2>&1 | grep -E "^(Identifier|Format|CodeDirectory|Signature)" || true
+          DIREITOS="$(codesign --display --entitlements - "${APP}" 2>/dev/null | grep -oE "com\.apple\.security\.[a-z.-]+" || true)"
           echo "Direitos do app:"
-          codesign --display --entitlements - "${APP}" 2>/dev/null | grep -oE "com\.apple\.security\.[a-z.-]+" || true
+          echo "${DIREITOS}"
+          if echo "${DIREITOS}" | grep -q "get-task-allow"; then
+            echo "::error::O app saiu com com.apple.security.get-task-allow"
+            exit 1
+          fi
+          if ! echo "${DIREITOS}" | grep -q "device.audio-input"; then
+            echo "::error::O app saiu sem os direitos do Release.entitlements"
+            exit 1
+          fi
 
       - name: Conferir o app compilado
         # Confere se o app tem o executável principal e o serviço, se o binário roda e
