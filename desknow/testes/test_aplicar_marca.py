@@ -21,10 +21,11 @@ SCRIPT = REPO / "desknow" / "aplicar-marca.py"
 MARCA = json.loads((REPO / "desknow" / "marca.json").read_text(encoding="utf-8"))
 
 # o que o script lê ou grava, copiado do RustDesk intacto (o repositório não recebe a marca)
-PASTAS = ["flutter/lib", "flutter/assets", "flutter/windows/runner",
+PASTAS = ["flutter/lib", "flutter/assets", "flutter/windows/runner", "flutter/macos/Runner",
           "flutter/android/app/src/main", "res"]
 ARQUIVOS = ["libs/hbb_common/src/config.rs", "src/auth_2fa.rs", "Cargo.toml",
-            "libs/portable/Cargo.toml", "flutter/pubspec.yaml", "flutter/android/app/build.gradle"]
+            "libs/portable/Cargo.toml", "flutter/pubspec.yaml", "flutter/android/app/build.gradle",
+            "build.py", "src/tray.rs"]
 CONFIG = "libs/hbb_common/src/config.rs"
 
 
@@ -94,6 +95,19 @@ class AplicarMarca(unittest.TestCase):
         origem = REPO / "desknow/marca/arquivos/flutter/assets/icon.png"
         self.assertEqual((self.raiz / "flutter/assets/icon.png").read_bytes(), origem.read_bytes())
         self.assertTrue((self.raiz / "flutter/assets/fonts/Geist-SemiBold.ttf").is_file())
+        # macOS
+        xc = ler(self.raiz, "flutter/macos/Runner/Configs/AppInfo.xcconfig")
+        self.assertIn(f"PRODUCT_NAME = {MARCA['nome']}", xc)
+        self.assertIn("PRODUCT_MODULE_NAME = RustDesk", xc)
+        self.assertIn(f"PRODUCT_BUNDLE_IDENTIFIER = {MARCA['mac_id']}", xc)
+        self.assertIn(f"<string>{MARCA['nome'].lower()}</string>", ler(self.raiz, "flutter/macos/Runner/Info.plist"))
+        self.assertIn(f"Release/{MARCA['nome']}.app/Contents/MacOS/", ler(self.raiz, "build.py"))
+        self.assertIn("assets/icone-bandeja-mac.png", ler(self.raiz, "src/tray.rs"))
+        self.assertTrue((self.raiz / "flutter/assets/icone-bandeja-mac.png").is_file())
+        icns = REPO / "desknow/marca/arquivos/flutter/macos/Runner/AppIcon.icns"
+        self.assertEqual((self.raiz / "flutter/macos/Runner/AppIcon.icns").read_bytes(), icns.read_bytes())
+        # o ORG continua o do RustDesk (nomes do serviço no macOS dependem dele)
+        self.assertIn('pub static ref ORG: RwLock<String> = RwLock::new("com.carriez".to_owned());', cfg)
 
     def test_idempotente(self):
         self.assertEqual(rodar(self.raiz).returncode, 0)

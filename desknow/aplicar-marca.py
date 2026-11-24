@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 PASTA = Path(__file__).resolve().parent  # desknow/
-CAMPOS = ("nome", "org", "android_id", "empresa", "servidor", "chave_publica",
+CAMPOS = ("nome", "android_id", "mac_id", "empresa", "servidor", "chave_publica",
           "repositorio", "privacidade", "cores")
 
 
@@ -117,8 +117,8 @@ def aplicar(raiz: Path, marca: dict, gravar: bool = True) -> tuple[list[str], li
 
     # 1. Núcleo (submódulo hbb_common): nome, organização, servidor e chave
     cfg = arq("libs/hbb_common/src/config.rs")
-    cfg.trocar('pub static ref ORG: RwLock<String> = RwLock::new("com.carriez".to_owned());',
-               f'pub static ref ORG: RwLock<String> = RwLock::new("{marca["org"]}".to_owned());')
+    # O ORG ("com.carriez") fica como está: no macOS, parte do código monta o nome do serviço
+    # com o ORG e parte com "com.carriez" fixo; trocar só um lado quebraria a instalação.
     cfg.trocar('pub static ref APP_NAME: RwLock<String> = RwLock::new("RustDesk".to_owned());',
                f'pub static ref APP_NAME: RwLock<String> = RwLock::new("{nome}".to_owned());')
     cfg.trocar_re(r'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[[^\]]*\];',
@@ -167,7 +167,25 @@ def aplicar(raiz: Path, marca: dict, gravar: bool = True) -> tuple[list[str], li
     servico.trocar('val channelName = "RustDesk Service"', f'val channelName = "{nome} Service"')
     servico.trocar('description = "RustDesk Service Channel"', f'description = "{nome} Service Channel"')
 
-    # 4. Interface (Flutter): fonte Geist, cores da marca e telas Sobre
+    # 4. macOS: nome do app, identificador, esquema de link, binário do serviço e ícone da barra
+    xc = arq("flutter/macos/Runner/Configs/AppInfo.xcconfig")
+    xc.trocar_re(r"(?m)^PRODUCT_NAME = [^\r\n]*", f"PRODUCT_NAME = {nome}")
+    xc.trocar_re(r"(?m)^PRODUCT_BUNDLE_IDENTIFIER = [^\r\n]*", f"PRODUCT_BUNDLE_IDENTIFIER = {marca['mac_id']}")
+    xc.trocar_re(r"(?m)^PRODUCT_COPYRIGHT = [^\r\n]*", f"PRODUCT_COPYRIGHT = {copyright_}")
+    # o MainMenu.xib procura AppDelegate e MainFlutterWindow no módulo Swift "RustDesk":
+    # o app muda de nome, o módulo não
+    xc.inserir_depois(f"PRODUCT_NAME = {nome}", f"{xc.nl}PRODUCT_MODULE_NAME = RustDesk")
+    plist = arq("flutter/macos/Runner/Info.plist")
+    plist.trocar("<string>com.carriez.rustdesk</string>", f"<string>{marca['mac_id']}</string>")
+    plist.trocar("<string>rustdesk</string>", f"<string>{nome.lower()}</string>")  # esquema desknow://
+    arq("build.py").trocar("./build/macos/Build/Products/Release/RustDesk.app/Contents/MacOS/",
+                           f"./build/macos/Build/Products/Release/{nome}.app/Contents/MacOS/")
+    # a barra de menus do macOS pinta o ícone de uma cor só: usa o símbolo-modelo, não o ladrilho
+    arq("src/tray.rs").trocar(
+        '"../Frameworks/App.framework/Resources/flutter_assets/assets/icon.png"',
+        '"../Frameworks/App.framework/Resources/flutter_assets/assets/icone-bandeja-mac.png"')
+
+    # 5. Interface (Flutter): fonte Geist, cores da marca e telas Sobre
     common = arq("flutter/lib/common.dart")
     for tema in ("lightTheme", "darkTheme"):
         common.inserir_depois(f"static ThemeData {tema} = ThemeData(", f"{common.nl}    fontFamily: 'Geist',")
@@ -207,7 +225,7 @@ def aplicar(raiz: Path, marca: dict, gravar: bool = True) -> tuple[list[str], li
     celular.inserir_depois("Text('Version: $version'),",
                            f"{celular.nl}        Text('Baseado no RustDesk © Purslane Tech Pte. Ltd. · Licença AGPL-3.0'),")
 
-    # 5. Conferência final: o app tem que sair apontando para o nosso servidor e chave
+    # 6. Conferência final: o app tem que sair apontando para o nosso servidor e chave
     final = cfg.texto
     for esperado in (f'RS_PUB_KEY: &str = "{marca["chave_publica"]}"',
                      f'RENDEZVOUS_SERVERS: &[&str] = &["{marca["servidor"]}"]',
@@ -215,7 +233,7 @@ def aplicar(raiz: Path, marca: dict, gravar: bool = True) -> tuple[list[str], li
         if esperado not in final:
             raise TrechoNaoEncontrado(f"libs/hbb_common/src/config.rs: depois da troca, falta {esperado!r}")
 
-    # 6. Ícones, logos e fontes: desknow/marca/arquivos espelha a raiz do repositório
+    # 7. Ícones, logos e fontes: desknow/marca/arquivos espelha a raiz do repositório
     origem = PASTA / "marca" / "arquivos"
     fontes = sorted(f for f in origem.rglob("*") if f.is_file()) if origem.is_dir() else []
     if not fontes:

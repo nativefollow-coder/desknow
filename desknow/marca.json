@@ -1,7 +1,7 @@
 {
   "nome": "DeskNow",
-  "org": "com.analistagomes",
   "android_id": "com.analistagomes.desknow",
+  "mac_id": "com.analistagomes.desknow",
   "empresa": "Gomes Analist",
   "servidor": "desknow.analistagomes.com",
   "chave_publica": "bECOsdAdTkGqhrizEoEoz6BeuGjWTbIk+kTcLm6WYTY=",
