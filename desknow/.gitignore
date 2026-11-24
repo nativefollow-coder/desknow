@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+# O .gitignore do RustDesk ignora *png e *svg; dentro de desknow/ eles fazem parte da marca.
+!*png
+!*svg

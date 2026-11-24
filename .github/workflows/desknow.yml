@@ -1,0 +1,565 @@
+# Build do DeskNow (versão com marca própria do RustDesk, AGPL-3.0).
+#
+# Derivado de .github/workflows/flutter-build.yml do RustDesk (commit 51f9439).
+# Só o que o DeskNow usa foi mantido: ponte Flutter-Rust, Windows x64 (Flutter)
+# e Android aarch64. A marca é aplicada na hora da compilação pelo script
+# desknow/aplicar-marca.py, logo depois do checkout com submódulos.
+#
+# Gatilhos:
+#   - workflow_dispatch: gera os artefatos; com "publicar" = true também cria o release.
+#   - push de tag desknow-v<versão>: gera os artefatos e cria o release.
+
+name: Build DeskNow
+
+on:
+  workflow_dispatch:
+    inputs:
+      publicar:
+        description: "Criar o release DeskNow no GitHub com o .exe e o .apk"
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "desknow-v*"
+
+# Permissão mínima no fluxo todo. Só o job de release pede escrita.
+permissions:
+  contents: read
+
+# Uma execução nova na mesma ref cancela a anterior.
+concurrency:
+  group: desknow-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Versões fixadas no upstream (flutter-build.yml). Não alterar sem testar.
+  RUST_VERSION: "1.75" # mesma versão que o upstream usa para Windows e Android
+  CARGO_NDK_VERSION: "3.1.2"
+  LLVM_VERSION: "15.0.6"
+  FLUTTER_VERSION: "3.24.5"
+  ANDROID_FLUTTER_VERSION: "3.24.5"
+  NDK_VERSION: "r28c"
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  # vcpkg 2026.07.29 (mesmo commit do upstream)
+  VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
+  VCPKG_CMAKE_VERSION: "4.3.0"
+
+jobs:
+  # Lê a versão de Cargo.toml (mesma fonte que o upstream usa) e a repassa
+  # aos demais jobs. Também confere se a tag do push bate com essa versão.
+  versao:
+    name: Ler a versão do Cargo.toml
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.versao.outputs.version }}
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Ler a versão do Cargo.toml
+        id: versao
+        shell: bash
+        run: |
+          # Primeira linha version = "..." do [package] (linha 3 de Cargo.toml)
+          versao=$(awk -F'"' '/^version[[:space:]]*=/ {print $2; exit}' Cargo.toml)
+          if [ -z "$versao" ]; then
+            echo "::error::Não achei a versão em Cargo.toml"
+            exit 1
+          fi
+          echo "version=$versao" >> "$GITHUB_OUTPUT"
+          echo "Versão do DeskNow: $versao"
+
+      - name: Conferir a tag do push
+        if: startsWith(github.ref, 'refs/tags/desknow-v')
+        shell: bash
+        env:
+          VERSAO: ${{ steps.versao.outputs.version }}
+        run: |
+          esperada="desknow-v${VERSAO}"
+          if [ "${GITHUB_REF_NAME}" != "$esperada" ]; then
+            echo "::error::A tag ${GITHUB_REF_NAME} não bate com a versão do Cargo.toml (esperada: ${esperada})"
+            exit 1
+          fi
+
+  # Ponte Flutter-Rust: reutiliza o workflow do upstream, sem alterações.
+  generate-bridge:
+    uses: ./.github/workflows/bridge.yml
+
+  # Componente nativo do RustDesk para a janela sempre no topo (só x64).
+  build-RustDeskTempTopMostWindow:
+    uses: ./.github/workflows/third-party-RustDeskTempTopMostWindow.yml
+    with:
+      upload-artifact: true
+      target: windows-2022
+      configuration: Release
+      platform: x64
+      target_version: Windows10
+
+  build-for-windows-flutter:
+    name: ${{ matrix.job.target }}
+    needs: [versao, build-RustDeskTempTopMostWindow, generate-bridge]
+    runs-on: ${{ matrix.job.os }}
+    env:
+      VERSION: ${{ needs.versao.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - {
+              target: x86_64-pc-windows-msvc,
+              os: windows-2022,
+              arch: x86_64,
+              flutter-arch: x64,
+              vcpkg-triplet: x64-windows-static,
+              build-args: "--vram",
+            }
+    steps:
+      - name: Exportar variáveis de cache do GitHub Actions
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Checkout do código (com submódulos)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Aplicar a marca DeskNow
+        # Roda logo após o checkout e antes de qualquer compilação.
+        # Se o script falhar, o job para aqui.
+        run: python desknow/aplicar-marca.py
+
+      - name: Restaurar arquivos da ponte
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bridge-artifact
+          path: ./
+
+      - name: Instalar LLVM e Clang
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: Instalar Flutter
+        uses: subosito/flutter-action@2783a3f08e1baf891508463f8c6653c258246225 # v2.12.0; https://github.com/subosito/flutter-action/issues/277
+        with:
+          channel: "stable"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          architecture: x64
+
+      # https://github.com/flutter/flutter/issues/155685
+      - name: Substituir o engine do Flutter pelo engine customizado do RustDesk
+        run: |
+          flutter doctor -v
+          flutter precache --windows
+          Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+          Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
+          mv -Force windows-x64-release/*  C:/hostedtoolcache/windows/flutter/stable-${{ env.FLUTTER_VERSION }}-x64/bin/cache/artifacts/engine/windows-x64-release/
+
+      - name: Aplicar o patch do Flutter
+        # Flutter 3.24.5 precisa do patch do filtro do dropdown (igual ao upstream).
+        shell: bash
+        run: |
+          cp .github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff $(dirname $(dirname $(which flutter)))
+          cd $(dirname $(dirname $(which flutter)))
+          if [[ "3.24.5" == ${{env.FLUTTER_VERSION}} ]]; then
+            git apply flutter_3.24.4_dropdown_menu_enableFilter.diff
+          fi
+
+      - name: Instalar a toolchain do Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: "rustfmt"
+
+      - name: Cache do Rust
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          prefix-key: ${{ matrix.job.os }}
+
+      - name: Configurar o vcpkg com cache binário do GitHub Actions
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Instalar as dependências do vcpkg
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: ${{ matrix.job.vcpkg-triplet }}
+        run: |
+          if ! $VCPKG_ROOT/vcpkg \
+            install \
+            --triplet ${{ matrix.job.vcpkg-triplet }} \
+            --x-install-root="$VCPKG_ROOT/installed"; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
+              echo "$_1:"
+              echo "======"
+              cat "$_1"
+              echo "======"
+              echo ""
+            done
+            exit 1
+          fi
+          head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-${{ matrix.job.vcpkg-triplet }}-rel-out.log" || true
+        shell: bash
+
+      - name: Compilar o DeskNow (Windows)
+        run: |
+          # --hwcodec vale para os builds Windows; --vram vem da matriz (só x64)
+          python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec ${{ matrix.job.build-args }}
+          mv ./flutter/build/windows/${{ matrix.job.flutter-arch }}/runner/Release ./rustdesk
+
+          # Driver de tela virtual usbmmidd_v2 (vai junto no pacote, como no upstream)
+          Invoke-WebRequest -Uri https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip -OutFile usbmmidd_v2.zip
+          Expand-Archive usbmmidd_v2.zip -DestinationPath .
+          Remove-Item -Path usbmmidd_v2\Win32 -Recurse
+          Remove-Item -Path "usbmmidd_v2\deviceinstaller64.exe", "usbmmidd_v2\deviceinstaller.exe", "usbmmidd_v2\usbmmidd.bat"
+          mv -Force .\usbmmidd_v2 ./rustdesk
+
+          # Driver de impressora (só entra se o checksum bater; falha não para o build)
+          try {
+            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/rustdesk_printer_driver_v4-1.4.zip -OutFile rustdesk_printer_driver_v4-1.4.zip
+            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/printer_driver_adapter.zip -OutFile printer_driver_adapter.zip
+            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/sha256sums -OutFile sha256sums
+
+            $checksum_driver = (Select-String -Path .\sha256sums -Pattern '^([a-fA-F0-9]{64}) \*rustdesk_printer_driver_v4-1.4\.zip$').Matches.Groups[1].Value
+            $downloadsum_driver = Get-FileHash -Path rustdesk_printer_driver_v4-1.4.zip -Algorithm SHA256
+            $checksum_adapter = (Select-String -Path .\sha256sums -Pattern '^([a-fA-F0-9]{64}) \*printer_driver_adapter\.zip$').Matches.Groups[1].Value
+            $downloadsum_adapter = Get-FileHash -Path printer_driver_adapter.zip -Algorithm SHA256
+            if ($checksum_driver -eq $downloadsum_driver.Hash -and $checksum_adapter -eq $downloadsum_adapter.Hash) {
+                Write-Output "rustdesk_printer_driver_v4-1.4: checksum confere, extraindo."
+                Expand-Archive rustdesk_printer_driver_v4-1.4.zip -DestinationPath .
+                mkdir ./rustdesk/drivers
+                mv -Force .\rustdesk_printer_driver_v4-1.4 ./rustdesk/drivers/RustDeskPrinterDriver
+                Expand-Archive printer_driver_adapter.zip -DestinationPath .
+                mv -Force .\printer_driver_adapter.dll ./rustdesk
+            } elseif ($checksum_driver -ne $downloadsum_driver.Hash) {
+                Write-Output "rustdesk_printer_driver_v4-1.4: checksum não confere, ignorando."
+            } else {
+                Write-Output "printer_driver_adapter.dll: checksum não confere, ignorando."
+            }
+          } catch {
+              Write-Host "Erro ao baixar o driver de impressora, ignorando."
+          }
+
+      - name: Procurar Runner.res
+        # Runner.res vem de flutter/windows/runner/Runner.rc e leva a versão ao empacotador
+        continue-on-error: true
+        shell: bash
+        run: |
+          runner_res=$(find . -name "Runner.res");
+          if [ "$runner_res" == "" ]; then
+            echo "Runner.res: não encontrado";
+          else
+            echo "Runner.res: $runner_res";
+            cp $runner_res ./libs/portable/Runner.res;
+            ls -l ./libs/portable/Runner.res;
+          fi
+
+      - name: Baixar os artefatos do RustDeskTempTopMostWindow
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: topmostwindow-artifacts-x64
+          path: "./rustdesk"
+
+      - name: Gerar o executável portátil (instalador final)
+        # O empacotador portátil junta a pasta ./rustdesk em um único .exe
+        shell: bash
+        run: |
+          sed -i '/dpiAware/d' res/manifest.xml
+          pushd ./libs/portable
+          pip3 install -r requirements.txt
+          python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/rustdesk.exe
+          popd
+          mkdir -p ./SaidaWindows
+          mv ./target/release/rustdesk-portable-packer.exe "./SaidaWindows/DeskNow-${VERSION}-${{ matrix.job.arch }}.exe"
+
+      - name: Enviar o executável Windows
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: DeskNow-${{ env.VERSION }}-${{ matrix.job.arch }}.exe
+          path: ./SaidaWindows/DeskNow-${{ env.VERSION }}-${{ matrix.job.arch }}.exe
+          if-no-files-found: error
+
+  build-rustdesk-android:
+    name: Compilar o APK Android (aarch64)
+    needs: [versao, generate-bridge]
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.versao.outputs.version }}
+      # Sem este secret o APK sai assinado só com a chave de debug (ver passos abaixo).
+      ANDROID_SIGNING_KEY: ${{ secrets.ANDROID_SIGNING_KEY }}
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - {
+              arch: aarch64,
+              target: aarch64-linux-android,
+              reltype: release,
+            }
+    steps:
+      - name: Liberar espaço em disco (Ubuntu)
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: false
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: false
+
+      - name: Exportar variáveis de cache do GitHub Actions
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Instalar dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+               clang \
+               cmake \
+               curl \
+               gcc-multilib \
+               git \
+               g++ \
+               g++-multilib \
+               libayatana-appindicator3-dev \
+               libasound2-dev \
+               libc6-dev \
+               libclang-dev \
+               libunwind-dev \
+               libgstreamer1.0-dev \
+               libgstreamer-plugins-base1.0-dev \
+               libgtk-3-dev \
+               libpulse-dev \
+               libva-dev \
+               libxcb-randr0-dev \
+               libxcb-shape0-dev \
+               libxcb-xfixes0-dev \
+               libxdo-dev \
+               libxfixes-dev \
+               llvm-dev \
+               nasm \
+               ninja-build \
+               openjdk-17-jdk-headless \
+               pkg-config \
+               tree \
+               wget
+
+      - name: Checkout do código (com submódulos)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Aplicar a marca DeskNow
+        # Roda logo após o checkout e antes de qualquer compilação.
+        run: python3 desknow/aplicar-marca.py
+
+      - name: Conferir os natives JNI em ffi.FFI
+        # Clientes customizados renomeiam com.carriez.flutter_hbb; só ffi.FFI mantém o nome.
+        shell: bash
+        run: |
+          bad=0
+          grep -rnE --include='*.rs' 'fn Java_' src libs | grep -v 'fn Java_ffi_FFI_' && bad=1
+          grep -rl --include='*.kt' 'external fun' flutter/android \
+            | grep -vx 'flutter/android/app/src/main/kotlin/ffi.kt' && bad=1
+          grep -rn --include='*.rs' 'com/carriez' src libs && bad=1
+          if [ "$bad" = 1 ]; then
+            echo "::error::Declare os natives Android em ffi.FFI, exporte como Java_ffi_FFI_* e não busque classes do app pelo nome (ver AGENTS.md)"
+            exit 1
+          fi
+
+      - name: Instalar Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: "stable"
+          flutter-version: ${{ env.ANDROID_FLUTTER_VERSION }}
+
+      - name: Aplicar o patch do Flutter
+        run: |
+          cd $(dirname $(dirname $(which flutter)))
+          if [[ "3.24.5" == ${{env.ANDROID_FLUTTER_VERSION}} ]]; then
+            git apply ${{ github.workspace }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff
+          fi
+
+      - uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779 # v1
+        id: setup-ndk
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: true
+
+      - name: Configurar o vcpkg com cache binário do GitHub Actions
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: /opt/artifacts/vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Instalar as dependências do vcpkg (arm64-v8a)
+        run: |
+          if ! ./flutter/build_android_deps.sh "arm64-v8a"; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
+              echo "$_1:"
+              echo "======"
+              cat "$_1"
+              echo "======"
+              echo ""
+            done
+            exit 1
+          fi
+        shell: bash
+
+      - name: Restaurar arquivos da ponte
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bridge-artifact
+          path: ./
+
+      - name: Instalar a toolchain do Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: "rustfmt"
+
+      - name: Cache do Rust
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          prefix-key: rustdesk-lib-cache-android
+          key: ${{ matrix.job.target }}
+
+      - name: Compilar a biblioteca Rust (aarch64)
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          rustup target add ${{ matrix.job.target }}
+          cargo install cargo-ndk --version ${{ env.CARGO_NDK_VERSION }} --locked
+          ./flutter/ndk_arm64.sh
+          mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
+          cp ./target/${{ matrix.job.target }}/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
+
+      - name: Compilar o APK DeskNow
+        shell: bash
+        env:
+          JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+        run: |
+          export PATH=/usr/lib/jvm/java-17-openjdk-amd64/bin:$PATH
+          # Mais memória para o Gradle no CI
+          sed -i "s/org.gradle.jvmargs=-Xmx1024M/org.gradle.jvmargs=-Xmx2g/g" ./flutter/android/gradle.properties
+          # Usa a configuração de assinatura de debug (igual ao upstream); a chave de release
+          # entra só no passo de assinatura, quando o secret existe.
+          sed -i "s/signingConfigs.release/signingConfigs.debug/g" ./flutter/android/app/build.gradle
+          mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
+          cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/
+          cp ./target/${{ matrix.job.target }}/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
+          pushd flutter
+          flutter build apk "--${{ matrix.job.reltype }}" --target-platform android-arm64 --split-per-abi
+          mkdir -p "$GITHUB_WORKSPACE/apk-sem-assinar"
+          mv build/app/outputs/flutter-apk/app-arm64-v8a-${{ matrix.job.reltype }}.apk "$GITHUB_WORKSPACE/apk-sem-assinar/DeskNow-${VERSION}-${{ matrix.job.arch }}.apk"
+          popd
+
+      # https://github.com/r0adkll/sign-android-release/issues/84#issuecomment-1889636075
+      - name: Descobrir a versão do build-tools do Android
+        if: env.ANDROID_SIGNING_KEY != ''
+        shell: bash
+        run: |
+          BUILD_TOOL_VERSION=$(ls /usr/local/lib/android/sdk/build-tools/ | tail -n 1)
+          echo "ANDROID_SIGN_TOOL_VERSION=$BUILD_TOOL_VERSION" >> $GITHUB_ENV
+          echo "Versão do build-tools: $BUILD_TOOL_VERSION"
+
+      - name: Assinar o APK com a chave de release
+        # Só roda com o secret ANDROID_SIGNING_KEY configurado.
+        if: env.ANDROID_SIGNING_KEY != ''
+        uses: r0adkll/sign-android-release@349ebdef58775b1e0d8099458af0816dc79b6407 # v1
+        id: sign-desknow
+        with:
+          releaseDirectory: ./apk-sem-assinar
+          signingKeyBase64: ${{ secrets.ANDROID_SIGNING_KEY }}
+          alias: ${{ secrets.ANDROID_ALIAS }}
+          keyStorePassword: ${{ secrets.ANDROID_KEY_STORE_PASSWORD }}
+          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        env:
+          # Definida pelo passo "Descobrir a versão do build-tools do Android"
+          BUILD_TOOLS_VERSION: ${{ env.ANDROID_SIGN_TOOL_VERSION }}
+
+      - name: Aviso de APK sem assinatura de release
+        if: env.ANDROID_SIGNING_KEY == ''
+        run: |
+          echo "::warning::Secret ANDROID_SIGNING_KEY ausente. O APK sai assinado só com a chave de debug, e não com a chave de release do DeskNow. Ele instala em aparelhos de teste, mas não atualiza uma versão assinada com a chave de release. Configure ANDROID_SIGNING_KEY, ANDROID_ALIAS, ANDROID_KEY_STORE_PASSWORD e ANDROID_KEY_PASSWORD para publicar."
+
+      - name: Preparar o APK final
+        shell: bash
+        env:
+          ASSINADO: ${{ env.ANDROID_SIGNING_KEY != '' }}
+          ARQUIVO_ASSINADO: ${{ steps.sign-desknow.outputs.signedReleaseFile }}
+        run: |
+          mkdir -p ./SaidaAndroid
+          destino="./SaidaAndroid/DeskNow-${VERSION}-${{ matrix.job.arch }}.apk"
+          if [ "$ASSINADO" = "true" ]; then
+            cp "$ARQUIVO_ASSINADO" "$destino"
+          else
+            cp "./apk-sem-assinar/DeskNow-${VERSION}-${{ matrix.job.arch }}.apk" "$destino"
+          fi
+          ls -l ./SaidaAndroid
+
+      - name: Enviar o APK Android
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: DeskNow-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
+          path: ./SaidaAndroid/DeskNow-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
+          if-no-files-found: error
+
+  publicar-release:
+    name: Publicar o release DeskNow
+    # Roda em push de tag desknow-v*, ou em workflow_dispatch com publicar = true.
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publicar) }}
+    needs: [versao, build-for-windows-flutter, build-rustdesk-android]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.versao.outputs.version }}
+    steps:
+      - name: Baixar os dois arquivos
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: DeskNow-*
+          merge-multiple: true
+          path: ./release
+
+      - name: Conferir os arquivos do release
+        shell: bash
+        run: |
+          ls -l ./release
+          test -f "./release/DeskNow-${VERSION}-x86_64.exe"
+          test -f "./release/DeskNow-${VERSION}-aarch64.apk"
+
+      - name: Definir a tag do release
+        id: tag
+        shell: bash
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=desknow-v${VERSION}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Criar o release no GitHub
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
+        with:
+          name: DeskNow ${{ env.VERSION }}
+          prerelease: true
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: |
+            ./release/DeskNow-*.exe
+            ./release/DeskNow-*.apk

@@ -1,0 +1,16 @@
+{
+  "nome": "DeskNow",
+  "org": "com.analistagomes",
+  "android_id": "com.analistagomes.desknow",
+  "empresa": "Gomes Analist",
+  "servidor": "desknow.analistagomes.com",
+  "chave_publica": "bECOsdAdTkGqhrizEoEoz6BeuGjWTbIk+kTcLm6WYTY=",
+  "repositorio": "https://github.com/nativefollow-coder/desknow",
+  "privacidade": "https://github.com/nativefollow-coder/desknow/blob/desknow/desknow/PRIVACIDADE.md",
+  "cores": {
+    "destaque": "4F5BE8",
+    "botao": "5A63EC",
+    "id": "0AA8D6",
+    "logo_claro": "2C2148"
+  }
+}

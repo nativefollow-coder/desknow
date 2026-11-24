@@ -1,0 +1,20 @@
+# DeskNow: servidor de ID (hbbs) e de relay (hbbr).
+# Imagem oficial do RustDesk Server (AGPL-3.0), com versão fixa.
+# Rede do host: portas 21115-21119 TCP e 21116 UDP direto na VPS (o Traefik não participa).
+# A chave privada fica em ./data/id_ed25519 (pasta só do root). Não apague: ela está gravada no app.
+name: desknow-server
+services:
+  hbbs:
+    image: rustdesk/rustdesk-server:1.1.16
+    command: hbbs -k _ -r desknow.analistagomes.com:21117
+    volumes:
+      - ./data:/root
+    network_mode: host
+    restart: unless-stopped
+  hbbr:
+    image: rustdesk/rustdesk-server:1.1.16
+    command: hbbr -k _
+    volumes:
+      - ./data:/root
+    network_mode: host
+    restart: unless-stopped
