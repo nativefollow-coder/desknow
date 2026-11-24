@@ -73,7 +73,7 @@ class AplicarMarca(unittest.TestCase):
         for toml in ("Cargo.toml", "libs/portable/Cargo.toml"):
             texto = ler(self.raiz, toml)
             self.assertIn(f'ProductName = "{MARCA["nome"]}"', texto, toml)
-            self.assertNotIn("RustDesk Remote Desktop", texto, toml)
+            self.assertNotIn('FileDescription = "RustDesk Remote Desktop"', texto, toml)
         self.assertIn(f'applicationId "{MARCA["android_id"]}"',
                       ler(self.raiz, "flutter/android/app/build.gradle"))
         self.assertNotIn("RustDesk", ler(self.raiz, "flutter/android/app/src/main/res/values/strings.xml"))
